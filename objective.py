@@ -72,6 +72,10 @@ def add_contrastive_loss(hidden,
     labels = tf.one_hot(tf.range(batch_size), batch_size * 2)
     masks = tf.one_hot(tf.range(batch_size), batch_size)
 
+  # [Nxh] * [hxN] -> [NxN]
+  # concat -> [Nx2N]
+  # labels -> [Nx2N]
+  # masks -> [NxN]
   logits_aa = tf.matmul(hidden1, hidden1_large, transpose_b=True) / temperature
   logits_aa = logits_aa - masks * LARGE_NUM
   logits_bb = tf.matmul(hidden2, hidden2_large, transpose_b=True) / temperature

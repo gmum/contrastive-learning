@@ -120,15 +120,39 @@ def build_input_fn(builder, is_training):
     def map_fn(image, label):
       """Produces multiple transformations of the same batch."""
       if FLAGS.train_mode == 'pretrain':
-        xs = []
-        for _ in range(2):  # Two transformations
-          xs.append(preprocess_fn_pretrain(image))
-        image = tf.concat(xs, -1)
-        label = tf.zeros([num_classes])
+        if FLAGS.augmentation_mode == 'augmentation_based':
+            return image, label, 1.0
+        else:
+          xs = []
+          for _ in range(2):  # Two transformations
+            xs.append(preprocess_fn_pretrain(image))
+          image = tf.concat(xs, -1)
+          label = tf.zeros([num_classes])
       else:
         image = preprocess_fn_finetune(image)
         label = tf.one_hot(label, num_classes)
       return image, label, 1.0
+
+    def aug_map_fn(images, labels, weights):
+      n_aug = int(len(images)/2)
+      # TODO: somehow un-hardcode '4'
+      aug_nums = np.random.randint(4, size=n_aug)
+
+      new_images = []
+      for i, aug_num in enumerate(aug_nums):
+        # the model should discriminate whether two different images have same augmentation applied
+        # to achieve this, we randomize a single augmentation applied to two consecutive samples (images) in the batch
+        # (analogously, original SimCLR randomizes two augmentations for a single image
+        #  as two consecutive samples in a batch)
+        for j in range(2):
+            images.append(preprocess_fn_pretrain(
+                images[2*i + j],
+                augmentation_mode='augmentation_based',
+                augmentation_num=aug_num
+            ))
+      images = tf.concat(new_images, -1)
+
+      return images, labels, weights
 
     dataset = builder.as_dataset(
         split=FLAGS.train_split if is_training else FLAGS.eval_split,
@@ -142,6 +166,9 @@ def build_input_fn(builder, is_training):
     dataset = dataset.map(map_fn,
                           num_parallel_calls=tf.data.experimental.AUTOTUNE)
     dataset = dataset.batch(params['batch_size'], drop_remainder=is_training)
+    if FLAGS.augmentation_mode == 'augmentation_based' and FLAGS.train_mode == 'pretrain':
+        dataset = dataset.map(aug_map_fn,
+                              num_parallel_calls=tf.data.experimental.AUTOTUNE)
     dataset = pad_to_batch(dataset, params['batch_size'])
     images, labels, mask = tf.data.make_one_shot_iterator(dataset).get_next()
 

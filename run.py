@@ -243,6 +243,12 @@ flags.DEFINE_boolean(
     'use_blur', True,
     'Whether or not to use Gaussian blur for augmentation during pretraining.')
 
+flags.DEFINE_string(
+    'augmentation_mode', 'original',
+    'Type of contrastive learning. '
+    '"original" == same as in SimCLR. '
+    '"augmentation_based" == contrastive learning to discriminate augmentations')
+
 
 def build_hub_module(model, num_classes, global_step, checkpoint_path):
   """Create TF-Hub module."""
