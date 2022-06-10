@@ -49,12 +49,17 @@ def build_model_fn(model, num_classes, num_train_examples):
       raise ValueError('Unknown train_mode {}'.format(FLAGS.train_mode))
 
     # Split channels, and optionally apply extra batched augmentation.
-    features_list = tf.split(
-        features, num_or_size_splits=num_transforms, axis=-1)
-    if FLAGS.use_blur and is_training and FLAGS.train_mode == 'pretrain':
-      features_list = data_util.batch_random_blur(
-          features_list, FLAGS.image_size, FLAGS.image_size)
-    features = tf.concat(features_list, 0)  # (num_transforms * bsz, h, w, c)
+    if FLAGS.augmentation_mode.startswith('augmentation_based'):
+      if FLAGS.use_blur and is_training and FLAGS.train_mode == 'pretrain':
+        features = data_util.batch_random_blur(
+            features, FLAGS.image_size, FLAGS.image_size)
+    else:
+      features_list = tf.split(
+          features, num_or_size_splits=num_transforms, axis=-1)
+      if FLAGS.use_blur and is_training and FLAGS.train_mode == 'pretrain':
+        features_list = data_util.batch_random_blur(
+            features_list, FLAGS.image_size, FLAGS.image_size)
+      features = tf.concat(features_list, 0)  # (num_transforms * bsz, h, w, c)
 
     # Base network forward pass.
     with tf.variable_scope('base_model'):
@@ -74,12 +79,20 @@ def build_model_fn(model, num_classes, num_train_examples):
           hiddens_proj,
           hidden_norm=FLAGS.hidden_norm,
           temperature=FLAGS.temperature,
-          tpu_context=tpu_context if is_training else None)
-      logits_sup = tf.zeros([params['batch_size'], num_classes])
+          tpu_context=tpu_context if is_training else None,
+          labels=labels)
+      if FLAGS.augmentation_mode.startswith('augmentation_based'):
+          logits_sup = tf.zeros([params['batch_size'] * 2, num_classes])
+      else:
+          logits_sup = tf.zeros([params['batch_size'], num_classes])
     else:
       contrast_loss = tf.zeros([])
-      logits_con = tf.zeros([params['batch_size'], 10])
-      labels_con = tf.zeros([params['batch_size'], 10])
+      if FLAGS.augmentation_mode.startswith('augmentation_based'):
+        batch_size = params['batch_size'] * 2
+      else:
+        batch_size = params['batch_size']
+      logits_con = tf.zeros([batch_size, 10])
+      labels_con = tf.zeros([batch_size, 10])
       hiddens = model_util.projection_head(hiddens, is_training)
       logits_sup = model_util.supervised_head(
           hiddens, num_classes, is_training)
@@ -186,7 +199,6 @@ def build_model_fn(model, num_classes, num_train_examples):
       return tf.estimator.tpu.TPUEstimatorSpec(
           mode=mode, train_op=train_op, loss=loss, scaffold_fn=scaffold_fn)
     else:
-
       def metric_fn(logits_sup, labels_sup, logits_con, labels_con, mask,
                     **kws):
         """Inner metric function."""
@@ -204,14 +216,19 @@ def build_model_fn(model, num_classes, num_train_examples):
             tf.argmax(labels_con, 1), logits_con, k=5, weights=mask)
         return metrics
 
+      if FLAGS.augmentation_mode.startswith('augmentation_based'):
+        batch_size = params['batch_size'] * 2
+      else:
+        batch_size = params['batch_size']
+      
       metrics = {
           'logits_sup': logits_sup,
           'labels_sup': labels['labels'],
           'logits_con': logits_con,
           'labels_con': labels_con,
           'mask': labels['mask'],
-          'contrast_loss': tf.fill((params['batch_size'],), contrast_loss),
-          'regularization_loss': tf.fill((params['batch_size'],),
+          'contrast_loss': tf.fill((batch_size,), contrast_loss),
+          'regularization_loss': tf.fill((batch_size,),
                                          tf.losses.get_regularization_loss()),
       }
 

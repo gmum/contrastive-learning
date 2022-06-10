@@ -24,6 +24,7 @@ from absl import flags
 
 import data_util as data_util
 import tensorflow.compat.v1 as tf
+import math
 
 FLAGS = flags.FLAGS
 
@@ -121,6 +122,31 @@ def build_input_fn(builder, is_training):
       """Produces multiple transformations of the same batch."""
       if FLAGS.train_mode == 'pretrain':
         if FLAGS.augmentation_mode == 'augmentation_based':
+            # TODO: somehow un-hardcode '4'
+            num_augs = 4
+            aug_num = tf.random.uniform(shape=[], minval=0, maxval=num_augs, dtype=tf.dtypes.int32)
+            image = preprocess_fn_pretrain(
+                image,
+                augmentation_mode='augmentation_based',
+                augmentation_num=aug_num
+            )
+
+            label = tf.one_hot(aug_num, num_augs)
+            return image, label, 1.0
+        elif FLAGS.augmentation_mode == 'augmentation_based2':
+            # TODO: somehow un-hardcode '4'
+            num_augs = 4
+            aug_num1 = tf.random.uniform(shape=[], minval=0, maxval=num_augs, dtype=tf.dtypes.int32)
+            aug_num2 = tf.random.uniform(shape=[], minval=0, maxval=num_augs, dtype=tf.dtypes.int32)
+            image = preprocess_fn_pretrain(
+                image,
+                augmentation_mode='augmentation_based2',
+                augmentation_num=(aug_num1, aug_num2)
+            )
+
+            label = (tf.one_hot(aug_num1, num_augs) + tf.one_hot(aug_num2, num_augs))
+            label = tf.math.l2_normalize(label, -1)
+
             return image, label, 1.0
         else:
           xs = []
@@ -131,28 +157,10 @@ def build_input_fn(builder, is_training):
       else:
         image = preprocess_fn_finetune(image)
         label = tf.one_hot(label, num_classes)
+
+      # map_fn shapes: (32, 32, 6) (10,)
+      # print("map_fn shapes:", image.shape, label.shape)
       return image, label, 1.0
-
-    def aug_map_fn(images, labels, weights):
-      n_aug = int(len(images)/2)
-      # TODO: somehow un-hardcode '4'
-      aug_nums = np.random.randint(4, size=n_aug)
-
-      new_images = []
-      for i, aug_num in enumerate(aug_nums):
-        # the model should discriminate whether two different images have same augmentation applied
-        # to achieve this, we randomize a single augmentation applied to two consecutive samples (images) in the batch
-        # (analogously, original SimCLR randomizes two augmentations for a single image
-        #  as two consecutive samples in a batch)
-        for j in range(2):
-            images.append(preprocess_fn_pretrain(
-                images[2*i + j],
-                augmentation_mode='augmentation_based',
-                augmentation_num=aug_num
-            ))
-      images = tf.concat(new_images, -1)
-
-      return images, labels, weights
 
     dataset = builder.as_dataset(
         split=FLAGS.train_split if is_training else FLAGS.eval_split,
@@ -165,11 +173,13 @@ def build_input_fn(builder, is_training):
       dataset = dataset.repeat(-1)
     dataset = dataset.map(map_fn,
                           num_parallel_calls=tf.data.experimental.AUTOTUNE)
-    dataset = dataset.batch(params['batch_size'], drop_remainder=is_training)
-    if FLAGS.augmentation_mode == 'augmentation_based' and FLAGS.train_mode == 'pretrain':
-        dataset = dataset.map(aug_map_fn,
-                              num_parallel_calls=tf.data.experimental.AUTOTUNE)
-    dataset = pad_to_batch(dataset, params['batch_size'])
+
+    if FLAGS.augmentation_mode.startswith('augmentation_based'):
+      batch_size = params['batch_size'] * 2
+    else:
+      batch_size = params['batch_size']
+    dataset = dataset.batch(batch_size, drop_remainder=is_training)
+    dataset = pad_to_batch(dataset, batch_size)
     images, labels, mask = tf.data.make_one_shot_iterator(dataset).get_next()
 
     return images, {'labels': labels, 'mask': mask}

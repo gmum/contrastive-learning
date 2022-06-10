@@ -22,8 +22,11 @@ from __future__ import print_function
 import tensorflow.compat.v1 as tf
 
 from tensorflow.compiler.tf2xla.python import xla  # pylint: disable=g-direct-tensorflow-import
+from absl import flags
+
 
 LARGE_NUM = 1e9
+FLAGS = flags.FLAGS
 
 
 def add_supervised_loss(labels, logits, weights, **kwargs):
@@ -35,7 +38,8 @@ def add_contrastive_loss(hidden,
                          hidden_norm=True,
                          temperature=1.0,
                          tpu_context=None,
-                         weights=1.0):
+                         weights=1.0,
+                         labels=None):
   """Compute loss for model.
 
   Args:
@@ -53,6 +57,28 @@ def add_contrastive_loss(hidden,
   # Get (normalized) hidden1 and hidden2.
   if hidden_norm:
     hidden = tf.math.l2_normalize(hidden, -1)
+
+  if FLAGS.augmentation_mode == 'augmentation_based' or FLAGS.augmentation_mode == 'augmentation_based2':
+      if tpu_context is not None:
+        raise NotImplemented("TPU not implemented yet")
+
+      aug_num = labels['labels']
+      same_aug = tf.matmul(aug_num, aug_num, transpose_b=True)
+      if FLAGS.augmentation_mode == 'augmentation_based2':
+        same_aug = same_aug > 0.95
+      same_aug = tf.cast(same_aug, tf.int32)
+
+      flat_label = tf.reshape(same_aug, [-1])
+      flat_label = tf.one_hot(flat_label, 2)
+      logits = tf.matmul(hidden, hidden, transpose_b=True) / temperature
+      flat_logits = tf.reshape(logits, [-1])
+      flat_logits = tf.stack([-flat_logits, flat_logits], 1)
+
+      # NOTE: weights is not implemented (does not work if different than 1.0)
+      loss = tf.losses.softmax_cross_entropy(flat_label, flat_logits, weights=weights)
+
+      return loss, flat_logits, flat_label
+
   hidden1, hidden2 = tf.split(hidden, 2, 0)
   batch_size = tf.shape(hidden1)[0]
 

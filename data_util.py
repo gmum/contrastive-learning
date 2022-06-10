@@ -470,15 +470,26 @@ def preprocess_for_train(image,
   Returns:
     A preprocessed image `Tensor`.
   """
-  if augmentation_mode == 'augmentation_based':
-    if augmentation_num == 1:
-      image = random_crop_with_resize(image, height, width, p=1.0)
-    elif augmentation_num == 2:
-      image = tf.image.random_flip_left_right(image, p=1.0)
-    elif augmentation_num == 3:
-      image = random_color_jitter(image, impl=impl, p=1.0)
-    else:
-      raise KeyError(f'Unknown augmentation number: {augmentation_num}')
+  if augmentation_mode == 'augmentation_based' or augmentation_mode == 'augmentation_based2':
+    if augmentation_mode == 'augmentation_based':
+      augmentation_num = (augmentation_num, )
+
+    for aug_num in augmentation_num:
+      image = tf.cond(
+        tf.math.equal(aug_num, tf.constant(1)),
+        true_fn=lambda: random_crop_with_resize(image, height, width, p=1.0),
+        false_fn=lambda:
+        tf.cond(
+          tf.math.equal(aug_num, tf.constant(2)), 
+          true_fn=lambda: tf.image.flip_left_right(image),
+          false_fn=lambda:
+          tf.cond(
+            tf.math.equal(aug_num, tf.constant(3)),
+            true_fn=lambda: random_color_jitter(image, impl=impl, p=1.0),
+            false_fn=lambda: image
+          )
+        )
+      )
   else:
     if crop:
       image = random_crop_with_resize(image, height, width)
@@ -530,7 +541,7 @@ def preprocess_image(image, height, width, is_training=False,
     A preprocessed image `Tensor` of range [0, 1].
   """
   image = tf.image.convert_image_dtype(image, dtype=tf.float32)
-  if is_training or augmentation_mode == 'augmentation_based':
+  if is_training or augmentation_mode.startswith('augmentation_based'):
     return preprocess_for_train(image, height, width, color_distort,
                                 augmentation_mode=augmentation_mode,
                                 augmentation_num=augmentation_num)
