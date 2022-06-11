@@ -58,7 +58,7 @@ def add_contrastive_loss(hidden,
   if hidden_norm:
     hidden = tf.math.l2_normalize(hidden, -1)
 
-  if FLAGS.augmentation_mode == 'augmentation_based' or FLAGS.augmentation_mode == 'augmentation_based2':
+  if FLAGS.augmentation_mode.startswith('augmentation_based'):
       if tpu_context is not None:
         raise NotImplemented("TPU not implemented yet")
 
@@ -79,24 +79,43 @@ def add_contrastive_loss(hidden,
 
       return loss, flat_logits, flat_label
 
-  hidden1, hidden2 = tf.split(hidden, 2, 0)
-  batch_size = tf.shape(hidden1)[0]
+  elif FLAGS.augmentation_mode.startswith('augmentation_diff'):
+      # get image pairs with non-augmented and augmented image versions
 
-  # Gather hidden1/hidden2 across replicas and create local labels.
-  if tpu_context is not None:
-    hidden1_large = tpu_cross_replica_concat(hidden1, tpu_context)
-    hidden2_large = tpu_cross_replica_concat(hidden2, tpu_context)
-    enlarged_batch_size = tf.shape(hidden1_large)[0]
-    # TODO(iamtingchen): more elegant way to convert u32 to s32 for replica_id.
-    replica_id = tf.cast(tf.cast(xla.replica_id(), tf.uint32), tf.int32)
-    labels_idx = tf.range(batch_size) + replica_id * batch_size
-    labels = tf.one_hot(labels_idx, enlarged_batch_size * 2)
-    masks = tf.one_hot(labels_idx, enlarged_batch_size)
+      hidden = tf.reshape(hidden, (hidden.shape[0] // 4, 4, *hidden.shape[1:]))
+      batch_size = hidden.shape[0]
+
+      # element 0, 1 = non-augmented.  2, 3 = augmented.
+      aug_diff1 = hidden[:, 2] - hidden[:, 0]
+      aug_diff2 = hidden[:, 3] - hidden[:, 1]
+
+      hidden1 = tf.math.l2_normalize(aug_diff1, -1)
+      hidden2 = tf.math.l2_normalize(aug_diff2, -1)
+
+      labels = tf.one_hot(tf.range(batch_size), batch_size * 2)
+      masks = tf.one_hot(tf.range(batch_size), batch_size)
+
+      hidden1_large = hidden1
+      hidden2_large = hidden2
   else:
-    hidden1_large = hidden1
-    hidden2_large = hidden2
-    labels = tf.one_hot(tf.range(batch_size), batch_size * 2)
-    masks = tf.one_hot(tf.range(batch_size), batch_size)
+      hidden1, hidden2 = tf.split(hidden, 2, 0)
+      batch_size = tf.shape(hidden1)[0]
+
+      # Gather hidden1/hidden2 across replicas and create local labels.
+      if tpu_context is not None:
+        hidden1_large = tpu_cross_replica_concat(hidden1, tpu_context)
+        hidden2_large = tpu_cross_replica_concat(hidden2, tpu_context)
+        enlarged_batch_size = tf.shape(hidden1_large)[0]
+        # TODO(iamtingchen): more elegant way to convert u32 to s32 for replica_id.
+        replica_id = tf.cast(tf.cast(xla.replica_id(), tf.uint32), tf.int32)
+        labels_idx = tf.range(batch_size) + replica_id * batch_size
+        labels = tf.one_hot(labels_idx, enlarged_batch_size * 2)
+        masks = tf.one_hot(labels_idx, enlarged_batch_size)
+      else:
+        hidden1_large = hidden1
+        hidden2_large = hidden2
+        labels = tf.one_hot(tf.range(batch_size), batch_size * 2)
+        masks = tf.one_hot(tf.range(batch_size), batch_size)
 
   # [Nxh] * [hxN] -> [NxN]
   # concat -> [Nx2N]

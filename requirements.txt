@@ -2,3 +2,10 @@ absl-py
 tensorflow==1.15.4
 tensorflow-datasets==3.1.0
 tensorflow-hub==0.8.0
+python run.py --mode=train_then_eval --train_mode=finetune \
+  --fine_tune_after_block=4 --zero_init_logits_layer=True \
+  --variable_schema='(?!global_step|(?:.*/|^)Momentum|head)' \
+  --global_bn=False --optimizer=momentum --learning_rate=0.1 --weight_decay=0.0 \
+  --train_epochs=100 --train_batch_size=512 --warmup_epochs=0 \
+  --dataset=cifar10 --image_size=32 --eval_split=test --resnet_depth=18 \
+  --checkpoint=/tmp/simclr_test --model_dir=/tmp/simclr_test_ft --use_tpu=False

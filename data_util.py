@@ -523,7 +523,7 @@ def preprocess_for_eval(image, height, width, crop=True):
 
 def preprocess_image(image, height, width, is_training=False,
                      color_distort=True, test_crop=True,
-                     augmentation_mode: bool = 'original', augmentation_num: int = 0):
+                     augmentation_mode: str = 'original', augmentation_num: int = 0):
   """Preprocesses the given image.
 
   Args:
@@ -541,7 +541,7 @@ def preprocess_image(image, height, width, is_training=False,
     A preprocessed image `Tensor` of range [0, 1].
   """
   image = tf.image.convert_image_dtype(image, dtype=tf.float32)
-  if is_training or augmentation_mode.startswith('augmentation_based'):
+  if is_training or augmentation_mode.startswith('augmentation'):
     return preprocess_for_train(image, height, width, color_distort,
                                 augmentation_mode=augmentation_mode,
                                 augmentation_num=augmentation_num)

@@ -49,7 +49,7 @@ def build_model_fn(model, num_classes, num_train_examples):
       raise ValueError('Unknown train_mode {}'.format(FLAGS.train_mode))
 
     # Split channels, and optionally apply extra batched augmentation.
-    if FLAGS.augmentation_mode.startswith('augmentation_based'):
+    if FLAGS.augmentation_mode.startswith('augmentation'):
       if FLAGS.use_blur and is_training and FLAGS.train_mode == 'pretrain':
         features = data_util.batch_random_blur(
             features, FLAGS.image_size, FLAGS.image_size)
@@ -81,7 +81,7 @@ def build_model_fn(model, num_classes, num_train_examples):
           temperature=FLAGS.temperature,
           tpu_context=tpu_context if is_training else None,
           labels=labels)
-      if FLAGS.augmentation_mode.startswith('augmentation_based'):
+      if FLAGS.augmentation_mode.startswith('augmentation'):
           logits_sup = tf.zeros([params['batch_size'] * 2, num_classes])
       else:
           logits_sup = tf.zeros([params['batch_size'], num_classes])
@@ -139,6 +139,7 @@ def build_model_fn(model, num_classes, num_train_examples):
               contrast_acc = tf.equal(
                   tf.argmax(labels_con, 1), tf.argmax(logits_con, axis=1))
               contrast_acc = tf.reduce_mean(tf.cast(contrast_acc, tf.float32))
+
               label_acc = tf.equal(
                   tf.argmax(labels['labels'], 1), tf.argmax(logits_sup, axis=1))
               label_acc = tf.reduce_mean(tf.cast(label_acc, tf.float32))

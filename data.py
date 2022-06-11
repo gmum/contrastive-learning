@@ -148,6 +148,9 @@ def build_input_fn(builder, is_training):
             label = tf.math.l2_normalize(label, -1)
 
             return image, label, 1.0
+        elif FLAGS.augmentation_mode == 'augmentation_diff':
+          label = tf.zeros([num_classes])
+          return image, label, 1.0
         else:
           xs = []
           for _ in range(2):  # Two transformations
@@ -158,8 +161,6 @@ def build_input_fn(builder, is_training):
         image = preprocess_fn_finetune(image)
         label = tf.one_hot(label, num_classes)
 
-      # map_fn shapes: (32, 32, 6) (10,)
-      # print("map_fn shapes:", image.shape, label.shape)
       return image, label, 1.0
 
     dataset = builder.as_dataset(
@@ -179,7 +180,60 @@ def build_input_fn(builder, is_training):
     else:
       batch_size = params['batch_size']
     dataset = dataset.batch(batch_size, drop_remainder=is_training)
-    dataset = pad_to_batch(dataset, batch_size)
+
+    if FLAGS.augmentation_mode.startswith('augmentation_diff'):
+        def group_pairs_fn(images, labels, weights):
+            # group images into pairs, each pair will have same augmentation applied
+            images = tf.reshape(images, (images.shape[0] // 2, 2, *images.shape[1:]))
+            labels = tf.reshape(labels, (labels.shape[0] // 2, 2, *labels.shape[1:]))
+            weights = tf.reshape(weights, (weights.shape[0] // 2, 2, *weights.shape[1:]))
+            return images, labels, weights
+
+        def augment_pairs_fn(images, labels, weights):
+            # apply exactly same augmentation on a pair of images
+            # and return both images with and without augmentations
+
+            # TODO: somehow un-hardcode '4'
+            num_augs = 4
+            aug_num1 = tf.random.uniform(shape=[], minval=0, maxval=num_augs, dtype=tf.dtypes.int32)
+            aug_num2 = tf.random.uniform(shape=[], minval=0, maxval=num_augs, dtype=tf.dtypes.int32)
+
+            augmented_images = []
+            for i in range(2):
+                augmented_images.append(preprocess_fn_pretrain(
+                    images[i],
+                    augmentation_mode='augmentation_based2',  # TODO
+                    augmentation_num=(aug_num1, aug_num2)
+                ))
+
+            augmented_images = tf.stack(augmented_images, axis=0)
+            images = tf.image.convert_image_dtype(images, dtype=tf.float32)
+            images = tf.concat([images, augmented_images], axis=0)
+            labels = tf.repeat(labels, 2, axis=0)
+            weights = tf.repeat(weights, 2, axis=0)
+
+            return images, labels, weights
+
+        def regroup_pairs_fn(images, labels, weights):
+            # join pairs of images with same augmentations (2 images, augmented and non-augmented = 4 samples)
+            # so that they can be inputted into the model
+            images = tf.reshape(images, (images.shape[0] * 4, *images.shape[2:]))
+            labels = tf.reshape(labels, (labels.shape[0] * 4, *labels.shape[2:]))
+            weights = tf.reshape(weights, (weights.shape[0] * 4, *weights.shape[2:]))
+            return images, labels, weights
+
+        dataset = dataset.map(group_pairs_fn,
+                              num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        dataset = dataset.unbatch()
+        dataset = dataset.map(augment_pairs_fn,
+                              num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        dataset = dataset.batch(batch_size // 2, drop_remainder=is_training)
+        dataset = dataset.map(regroup_pairs_fn,
+                              num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        dataset = pad_to_batch(dataset, batch_size * 2)
+    else:
+        dataset = pad_to_batch(dataset, batch_size)
+
     images, labels, mask = tf.data.make_one_shot_iterator(dataset).get_next()
 
     return images, {'labels': labels, 'mask': mask}
