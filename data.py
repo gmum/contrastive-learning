@@ -198,15 +198,21 @@ def build_input_fn(builder, is_training):
             aug_num1 = tf.random.uniform(shape=[], minval=0, maxval=num_augs, dtype=tf.dtypes.int32)
             aug_num2 = tf.random.uniform(shape=[], minval=0, maxval=num_augs, dtype=tf.dtypes.int32)
 
-            augmented_images = []
-            for i in range(2):
-                augmented_images.append(preprocess_fn_pretrain(
-                    images[i],
-                    augmentation_mode='augmentation_based2',  # TODO
-                    augmentation_num=(aug_num1, aug_num2)
-                ))
+            # apply augmentations on a single image with C*2 channels
+            # so that both images in pair have exactly same augmentations applied
+            image_pair_as_one = tf.transpose(images, (1, 2, 0, 3))
+            image_pair_as_one = tf.reshape(image_pair_as_one, (*image_pair_as_one.shape[:2], -1))
 
-            augmented_images = tf.stack(augmented_images, axis=0)
+            augmented_images = preprocess_fn_pretrain(
+                image_pair_as_one,
+                augmentation_mode='augmentation_based2',
+                augmentation_num=(aug_num1, aug_num2)
+            )
+
+            augmented_images = tf.reshape(augmented_images, (*augmented_images.shape[:2], 2, 3))
+            augmented_images = tf.transpose(augmented_images, (2, 0, 1, 3))
+
+            # augmented_images = tf.stack(augmented_images, axis=0)
             images = tf.image.convert_image_dtype(images, dtype=tf.float32)
             images = tf.concat([images, augmented_images], axis=0)
             labels = tf.repeat(labels, 2, axis=0)

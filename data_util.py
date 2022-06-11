@@ -75,6 +75,7 @@ def color_jitter(image, strength, random_order=True, impl='simclrv2'):
   contrast = 0.8 * strength
   saturation = 0.8 * strength
   hue = 0.2 * strength
+
   if random_order:
     return color_jitter_rand(
         image, brightness, contrast, saturation, hue, impl=impl)
@@ -385,12 +386,24 @@ def random_crop_with_resize(image, height, width, p=1.0):
 
 
 def random_color_jitter(image, p=1.0, impl='simclrv2'):
-
   def _transform(image):
+    if image.shape[-1] == 6:
+      pair_sample = True
+      image = tf.reshape(image, (*image.shape[:2], 2, 3))
+      image = tf.reshape(image, (image.shape[0], image.shape[1] * 2, 3))
+    else:
+      pair_sample = False
+
     color_jitter_t = functools.partial(
         color_jitter, strength=FLAGS.color_jitter_strength, impl=impl)
     image = random_apply(color_jitter_t, p=0.8, x=image)
-    return random_apply(to_grayscale, p=0.2, x=image)
+    result = random_apply(to_grayscale, p=0.2, x=image)
+
+    if pair_sample:
+      result = tf.reshape(result, (image.shape[0], image.shape[1] // 2, 6))
+
+    return result
+
   return random_apply(_transform, p=p, x=image)
 
 
@@ -497,7 +510,8 @@ def preprocess_for_train(image,
       image = tf.image.random_flip_left_right(image)
     if color_distort:
       image = random_color_jitter(image, impl=impl)
-  image = tf.reshape(image, [height, width, 3])
+
+  image = tf.reshape(image, [height, width, image.shape[-1]])
   image = tf.clip_by_value(image, 0., 1.)
   return image
 
