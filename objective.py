@@ -24,6 +24,7 @@ import tensorflow.compat.v1 as tf
 from tensorflow.compiler.tf2xla.python import xla  # pylint: disable=g-direct-tensorflow-import
 from absl import flags
 
+from model_util import get_projection_head
 
 LARGE_NUM = 1e9
 FLAGS = flags.FLAGS
@@ -56,7 +57,10 @@ def add_contrastive_loss(hidden,
   """
   # Get (normalized) hidden1 and hidden2.
   if hidden_norm:
-    hidden = tf.math.l2_normalize(hidden, -1)
+    if FLAGS.augmentation_mode == 'augmentation_diff_combined':
+      hidden = [tf.math.l2_normalize(hidden[0], -1), tf.math.l2_normalize(hidden[1], -1)]
+    else:
+      hidden = tf.math.l2_normalize(hidden, -1)
 
   if FLAGS.augmentation_mode.startswith('augmentation_based'):
       if tpu_context is not None:
@@ -79,9 +83,8 @@ def add_contrastive_loss(hidden,
 
       return loss, flat_logits, flat_label
 
-  elif FLAGS.augmentation_mode.startswith('augmentation_diff'):
+  elif FLAGS.augmentation_mode == 'augmentation_diff':
       # get image pairs with non-augmented and augmented image versions
-
       hidden = tf.reshape(hidden, (hidden.shape[0] // 4, 4, *hidden.shape[1:]))
       batch_size = hidden.shape[0]
 
@@ -97,6 +100,70 @@ def add_contrastive_loss(hidden,
 
       hidden1_large = hidden1
       hidden2_large = hidden2
+  elif FLAGS.augmentation_mode == 'augmentation_diff_combined':
+      hidden_img, hidden_aug = hidden[0], hidden[1]
+
+      # get image pairs with non-augmented and augmented image versions
+      hidden_img = tf.reshape(hidden_img, (hidden_img.shape[0] // 4, 4, *hidden_img.shape[1:]))
+      hidden_aug = tf.reshape(hidden_aug, (hidden_aug.shape[0] // 4, 4, *hidden_aug.shape[1:]))
+      batch_size = hidden_aug.shape[0]
+
+
+      hidden_aug_left = tf.concat([hidden_aug[:, 0], hidden_aug[:, 1]], 0)
+      hidden_aug_right = tf.concat([hidden_aug[:, 2], hidden_aug[:, 3]], 0)
+
+      aug_diff_proj_head = get_projection_head(hidden_aug_left - hidden_aug_right, is_training=True,
+                                               mid_dim=hidden_aug.shape[-1])
+      aug_diff_proj_head = tf.math.l2_normalize(aug_diff_proj_head)
+
+      # element 0, 1 = augmentation1.  2, 3 = augmentation2.
+      hidden_aug1 = aug_diff_proj_head[:aug_diff_proj_head.shape[0]//2]
+      hidden_aug2 = aug_diff_proj_head[aug_diff_proj_head.shape[0]//2:]
+
+      hidden_img1 = tf.concat([hidden_img[:, 0], hidden_img[:, 2]], 0)
+      hidden_img2 = tf.concat([hidden_img[:, 1], hidden_img[:, 3]], 0)
+
+      labels_img = tf.one_hot(tf.range(batch_size * 2), batch_size * 4)
+      masks_img = tf.one_hot(tf.range(batch_size * 2), batch_size * 2)
+
+      logits_aa_img = tf.matmul(hidden_img1, hidden_img1, transpose_b=True) / temperature
+      logits_aa_img = logits_aa_img - masks_img * LARGE_NUM
+      logits_bb_img = tf.matmul(hidden_img2, hidden_img2, transpose_b=True) / temperature
+      logits_bb_img = logits_bb_img - masks_img * LARGE_NUM
+      logits_ab_img = tf.matmul(hidden_img1, hidden_img2, transpose_b=True) / temperature
+      logits_ba_img = tf.matmul(hidden_img2, hidden_img1, transpose_b=True) / temperature
+
+      loss_a_img = tf.losses.softmax_cross_entropy(
+          labels_img, tf.concat([logits_ab_img, logits_aa_img], 1), weights=weights)
+      loss_b_img = tf.losses.softmax_cross_entropy(
+          labels_img, tf.concat([logits_ba_img, logits_bb_img], 1), weights=weights)
+      loss_img = loss_a_img + loss_b_img
+
+      labels_aug = tf.one_hot(tf.range(batch_size), batch_size * 2)
+      masks_aug = tf.one_hot(tf.range(batch_size), batch_size)
+
+      logits_aa_aug = tf.matmul(hidden_aug1, hidden_aug1, transpose_b=True) / temperature
+      logits_aa_aug = logits_aa_aug - masks_aug * LARGE_NUM
+      logits_bb_aug = tf.matmul(hidden_aug2, hidden_aug2, transpose_b=True) / temperature
+      logits_bb_aug = logits_bb_aug - masks_aug * LARGE_NUM
+      logits_ab_aug = tf.matmul(hidden_aug1, hidden_aug2, transpose_b=True) / temperature
+      logits_ba_aug = tf.matmul(hidden_aug2, hidden_aug1, transpose_b=True) / temperature
+
+      loss_a_aug = tf.losses.softmax_cross_entropy(
+          labels_aug, tf.concat([logits_ab_aug, logits_aa_aug], 1), weights=weights)
+      loss_b_aug = tf.losses.softmax_cross_entropy(
+          labels_aug, tf.concat([logits_ba_aug, logits_bb_aug], 1), weights=weights)
+      loss_aug = loss_a_aug + loss_b_aug
+
+      loss = FLAGS.pretrain_loss_weight_aug * loss_aug + (1.0 - FLAGS.pretrain_loss_weight_aug) * loss_img
+
+      logits_ab_aug = tf.concat([logits_ab_aug, tf.fill(logits_ab_aug.shape, -LARGE_NUM)], -1)
+      labels_aug = tf.concat([labels_aug, tf.zeros_like(labels_aug)], -1)
+
+      logits_ab = tf.concat([logits_ab_img, logits_ab_aug], axis=0)
+      labels = tf.concat([labels_img, labels_aug], axis=0)
+
+      return loss, logits_ab, labels
   else:
       hidden1, hidden2 = tf.split(hidden, 2, 0)
       batch_size = tf.shape(hidden1)[0]
@@ -117,10 +184,6 @@ def add_contrastive_loss(hidden,
         labels = tf.one_hot(tf.range(batch_size), batch_size * 2)
         masks = tf.one_hot(tf.range(batch_size), batch_size)
 
-  # [Nxh] * [hxN] -> [NxN]
-  # concat -> [Nx2N]
-  # labels -> [Nx2N]
-  # masks -> [NxN]
   logits_aa = tf.matmul(hidden1, hidden1_large, transpose_b=True) / temperature
   logits_aa = logits_aa - masks * LARGE_NUM
   logits_bb = tf.matmul(hidden2, hidden2_large, transpose_b=True) / temperature

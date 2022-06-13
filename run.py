@@ -249,6 +249,11 @@ flags.DEFINE_string(
     '"original" == same as in SimCLR. '
     '"augmentation_based" == contrastive learning to discriminate augmentations')
 
+flags.DEFINE_float(
+    'pretrain_loss_weight_aug', 0.5,
+    'In "combined" augmentation mode, weight of the loss part based on augmentation representation difference.')
+
+
 
 def build_hub_module(model, num_classes, global_step, checkpoint_path):
   """Create TF-Hub module."""

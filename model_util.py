@@ -138,38 +138,53 @@ def linear_layer(x,
   return x
 
 
+def get_projection_head(hiddens, is_training, mid_dim):
+    out_dim = FLAGS.proj_out_dim
+    if FLAGS.proj_head_mode == 'none':
+        return hiddens
+    elif FLAGS.proj_head_mode == 'linear':
+        proj = linear_layer(
+            hiddens, is_training, out_dim,
+            use_bias=False, use_bn=True, name='l_0')
+        return proj
+    elif FLAGS.proj_head_mode == 'nonlinear':
+        for j in range(FLAGS.num_proj_layers):
+            if j != FLAGS.num_proj_layers - 1:
+                # for the middle layers, use bias and relu for the output.
+                dim, bias_relu = mid_dim, True
+            else:
+                # for the final layer, neither bias nor relu is used.
+                dim, bias_relu = FLAGS.proj_out_dim, False
+            proj = linear_layer(
+                hiddens, is_training, dim,
+                use_bias=bias_relu, use_bn=True, name='nl_%d' % j)
+            proj = tf.nn.relu(proj) if bias_relu else proj
+        return proj
+    else:
+        raise ValueError('Unknown head projection mode {}'.format(
+            FLAGS.proj_head_mode))
+
+
 def projection_head(hiddens, is_training, name='head_contrastive'):
   """Head for projecting hiddens fo contrastive loss."""
   with tf.variable_scope(name, reuse=tf.AUTO_REUSE):
     mid_dim = hiddens.shape[-1]
-    out_dim = FLAGS.proj_out_dim
     hiddens_list = [hiddens]
-    if FLAGS.proj_head_mode == 'none':
-      pass  # directly use the output hiddens as hiddens.
-    elif FLAGS.proj_head_mode == 'linear':
-      hiddens = linear_layer(
-          hiddens, is_training, out_dim,
-          use_bias=False, use_bn=True, name='l_0')
-      hiddens_list.append(hiddens)
-    elif FLAGS.proj_head_mode == 'nonlinear':
-      for j in range(FLAGS.num_proj_layers):
-        if j != FLAGS.num_proj_layers - 1:
-          # for the middle layers, use bias and relu for the output.
-          dim, bias_relu = mid_dim, True
-        else:
-          # for the final layer, neither bias nor relu is used.
-          dim, bias_relu = FLAGS.proj_out_dim, False
-        hiddens = linear_layer(
-            hiddens, is_training, dim,
-            use_bias=bias_relu, use_bn=True, name='nl_%d'%j)
-        hiddens = tf.nn.relu(hiddens) if bias_relu else hiddens
-        hiddens_list.append(hiddens)
+
+    if FLAGS.augmentation_mode == 'augmentation_diff_combined':
+        n_projections = 2
     else:
-      raise ValueError('Unknown head projection mode {}'.format(
-          FLAGS.proj_head_mode))
+        n_projections = 1
+
+    for _ in range(n_projections):
+        hiddens_list.append(get_projection_head(hiddens, is_training, mid_dim))
+
     if FLAGS.train_mode == 'pretrain':
       # take the projection head output during pre-training.
-      hiddens = hiddens_list[-1]
+      if n_projections == 1:
+        hiddens = hiddens_list[-1]
+      else:
+        hiddens = hiddens_list[-n_projections:]
     else:
       # for checkpoint compatibility, whole projection head is built here.
       # but you can select part of projection head during fine-tuning.

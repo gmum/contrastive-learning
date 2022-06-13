@@ -24,7 +24,6 @@ from absl import flags
 
 import data_util as data_util
 import tensorflow.compat.v1 as tf
-import math
 
 FLAGS = flags.FLAGS
 
@@ -148,7 +147,7 @@ def build_input_fn(builder, is_training):
             label = tf.math.l2_normalize(label, -1)
 
             return image, label, 1.0
-        elif FLAGS.augmentation_mode == 'augmentation_diff':
+        elif FLAGS.augmentation_mode.startswith('augmentation_diff'):
           label = tf.zeros([num_classes])
           return image, label, 1.0
         else:
@@ -181,7 +180,7 @@ def build_input_fn(builder, is_training):
       batch_size = params['batch_size']
     dataset = dataset.batch(batch_size, drop_remainder=is_training)
 
-    if FLAGS.augmentation_mode.startswith('augmentation_diff'):
+    if FLAGS.augmentation_mode.startswith('augmentation_diff') and FLAGS.train_mode == 'pretrain':
         def group_pairs_fn(images, labels, weights):
             # group images into pairs, each pair will have same augmentation applied
             images = tf.reshape(images, (images.shape[0] // 2, 2, *images.shape[1:]))
@@ -190,31 +189,34 @@ def build_input_fn(builder, is_training):
             return images, labels, weights
 
         def augment_pairs_fn(images, labels, weights):
-            # apply exactly same augmentation on a pair of images
+            # apply exactly same augmentations on a pair of images
             # and return both images with and without augmentations
 
+            # run two different augmentations on each image pair
             # TODO: somehow un-hardcode '4'
             num_augs = 4
-            aug_num1 = tf.random.uniform(shape=[], minval=0, maxval=num_augs, dtype=tf.dtypes.int32)
-            aug_num2 = tf.random.uniform(shape=[], minval=0, maxval=num_augs, dtype=tf.dtypes.int32)
 
             # apply augmentations on a single image with C*2 channels
             # so that both images in pair have exactly same augmentations applied
             image_pair_as_one = tf.transpose(images, (1, 2, 0, 3))
             image_pair_as_one = tf.reshape(image_pair_as_one, (*image_pair_as_one.shape[:2], -1))
 
-            augmented_images = preprocess_fn_pretrain(
-                image_pair_as_one,
-                augmentation_mode='augmentation_based2',
-                augmentation_num=(aug_num1, aug_num2)
-            )
+            augmented_image_pairs = []
+            for _ in range(2):
+                aug_num1 = tf.random.uniform(shape=[], minval=0, maxval=num_augs, dtype=tf.dtypes.int32)
+                aug_num2 = tf.random.uniform(shape=[], minval=0, maxval=num_augs, dtype=tf.dtypes.int32)
 
-            augmented_images = tf.reshape(augmented_images, (*augmented_images.shape[:2], 2, 3))
-            augmented_images = tf.transpose(augmented_images, (2, 0, 1, 3))
+                augmented_images = preprocess_fn_pretrain(
+                    image_pair_as_one,
+                    augmentation_mode='augmentation_based2',
+                    augmentation_num=(aug_num1, aug_num2)
+                )
 
-            # augmented_images = tf.stack(augmented_images, axis=0)
-            images = tf.image.convert_image_dtype(images, dtype=tf.float32)
-            images = tf.concat([images, augmented_images], axis=0)
+                augmented_images = tf.reshape(augmented_images, (*augmented_images.shape[:2], 2, 3))
+                augmented_images = tf.transpose(augmented_images, (2, 0, 1, 3))
+                augmented_image_pairs.append(augmented_images)
+
+            images = tf.concat(augmented_image_pairs, axis=0)
             labels = tf.repeat(labels, 2, axis=0)
             weights = tf.repeat(weights, 2, axis=0)
 
