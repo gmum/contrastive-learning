@@ -89,7 +89,7 @@ def add_contrastive_loss(hidden,
 
       aug_diff_proj_head = get_projection_head(hidden_aug_left - hidden_aug_right, is_training=True,
                                                mid_dim=hidden_aug.shape[-1])
-      aug_diff_proj_head = tf.math.l2_normalize(aug_diff_proj_head)
+      aug_diff_proj_head = tf.math.l2_normalize(aug_diff_proj_head, -1)
       hidden_aug1 = aug_diff_proj_head[:aug_diff_proj_head.shape[0]//2]
       hidden_aug2 = aug_diff_proj_head[aug_diff_proj_head.shape[0]//2:]
 
