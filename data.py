@@ -120,34 +120,7 @@ def build_input_fn(builder, is_training):
     def map_fn(image, label):
       """Produces multiple transformations of the same batch."""
       if FLAGS.train_mode == 'pretrain':
-        if FLAGS.augmentation_mode == 'augmentation_based':
-            # TODO: somehow un-hardcode '4'
-            num_augs = 4
-            aug_num = tf.random.uniform(shape=[], minval=0, maxval=num_augs, dtype=tf.dtypes.int32)
-            image = preprocess_fn_pretrain(
-                image,
-                augmentation_mode='augmentation_based',
-                augmentation_num=aug_num
-            )
-
-            label = tf.one_hot(aug_num, num_augs)
-            return image, label, 1.0
-        elif FLAGS.augmentation_mode == 'augmentation_based2':
-            # TODO: somehow un-hardcode '4'
-            num_augs = 4
-            aug_num1 = tf.random.uniform(shape=[], minval=0, maxval=num_augs, dtype=tf.dtypes.int32)
-            aug_num2 = tf.random.uniform(shape=[], minval=0, maxval=num_augs, dtype=tf.dtypes.int32)
-            image = preprocess_fn_pretrain(
-                image,
-                augmentation_mode='augmentation_based2',
-                augmentation_num=(aug_num1, aug_num2)
-            )
-
-            label = (tf.one_hot(aug_num1, num_augs) + tf.one_hot(aug_num2, num_augs))
-            label = tf.math.l2_normalize(label, -1)
-
-            return image, label, 1.0
-        elif FLAGS.augmentation_mode.startswith('augmentation_diff'):
+        if FLAGS.augmentation_mode.startswith('augmentation_diff'):
           label = tf.zeros([num_classes])
           return image, label, 1.0
         else:
@@ -192,10 +165,6 @@ def build_input_fn(builder, is_training):
             # apply exactly same augmentations on a pair of images
             # and return both images with and without augmentations
 
-            # run two different augmentations on each image pair
-            # TODO: somehow un-hardcode '4'
-            num_augs = 4
-
             # apply augmentations on a single image with C*2 channels
             # so that both images in pair have exactly same augmentations applied
             image_pair_as_one = tf.transpose(images, (1, 2, 0, 3))
@@ -203,15 +172,7 @@ def build_input_fn(builder, is_training):
 
             augmented_image_pairs = []
             for _ in range(2):
-                aug_num1 = tf.random.uniform(shape=[], minval=0, maxval=num_augs, dtype=tf.dtypes.int32)
-                aug_num2 = tf.random.uniform(shape=[], minval=0, maxval=num_augs, dtype=tf.dtypes.int32)
-
-                augmented_images = preprocess_fn_pretrain(
-                    image_pair_as_one,
-                    augmentation_mode='augmentation_based2',
-                    augmentation_num=(aug_num1, aug_num2)
-                )
-
+                augmented_images = preprocess_fn_pretrain(image_pair_as_one)
                 augmented_images = tf.reshape(augmented_images, (*augmented_images.shape[:2], 2, 3))
                 augmented_images = tf.transpose(augmented_images, (2, 0, 1, 3))
                 augmented_image_pairs.append(augmented_images)

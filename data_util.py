@@ -463,9 +463,7 @@ def preprocess_for_train(image,
                          color_distort=True,
                          crop=True,
                          flip=True,
-                         impl='simclrv2',
-                         augmentation_mode: str = 'original',
-                         augmentation_num: int = 0):
+                         impl='simclrv2'):
   """Preprocesses the given image for training.
 
   Args:
@@ -477,39 +475,15 @@ def preprocess_for_train(image,
     flip: Whether or not to flip left and right of an image.
     impl: 'simclrv1' or 'simclrv2'.  Whether to use simclrv1 or simclrv2's
         version of random brightness.
-    augmentation_mode: 'original' == same as in SimCLR
-                       'augmentation_based' == contrastive learning to discriminate augmentations
-    augmentation_num: number of the applied augmentation (required for 'augmentation_based' augmentation mode
   Returns:
     A preprocessed image `Tensor`.
   """
-  if augmentation_mode == 'augmentation_based' or augmentation_mode == 'augmentation_based2':
-    if augmentation_mode == 'augmentation_based':
-      augmentation_num = (augmentation_num, )
-
-    for aug_num in augmentation_num:
-      image = tf.cond(
-        tf.math.equal(aug_num, tf.constant(1)),
-        true_fn=lambda: random_crop_with_resize(image, height, width, p=1.0),
-        false_fn=lambda:
-        tf.cond(
-          tf.math.equal(aug_num, tf.constant(2)), 
-          true_fn=lambda: tf.image.flip_left_right(image),
-          false_fn=lambda:
-          tf.cond(
-            tf.math.equal(aug_num, tf.constant(3)),
-            true_fn=lambda: random_color_jitter(image, impl=impl, p=1.0),
-            false_fn=lambda: image
-          )
-        )
-      )
-  else:
-    if crop:
-      image = random_crop_with_resize(image, height, width)
-    if flip:
-      image = tf.image.random_flip_left_right(image)
-    if color_distort:
-      image = random_color_jitter(image, impl=impl)
+  if crop:
+    image = random_crop_with_resize(image, height, width)
+  if flip:
+    image = tf.image.random_flip_left_right(image)
+  if color_distort:
+    image = random_color_jitter(image, impl=impl)
 
   image = tf.reshape(image, [height, width, image.shape[-1]])
   image = tf.clip_by_value(image, 0., 1.)
@@ -536,8 +510,7 @@ def preprocess_for_eval(image, height, width, crop=True):
 
 
 def preprocess_image(image, height, width, is_training=False,
-                     color_distort=True, test_crop=True,
-                     augmentation_mode: str = 'original', augmentation_num: int = 0):
+                     color_distort=True, test_crop=True):
   """Preprocesses the given image.
 
   Args:
@@ -548,16 +521,11 @@ def preprocess_image(image, height, width, is_training=False,
     color_distort: whether to apply the color distortion.
     test_crop: whether or not to extract a central crop of the images
         (as for standard ImageNet evaluation) during the evaluation.
-    augmentation_mode: 'original' == same as in SimCLR
-                       'augmentation_based' == contrastive learning to discriminate augmentations
-    augmentation_num: number of the applied augmentation (required for 'augmentation_based' augmentation mode
   Returns:
     A preprocessed image `Tensor` of range [0, 1].
   """
   image = tf.image.convert_image_dtype(image, dtype=tf.float32)
-  if is_training or augmentation_mode.startswith('augmentation'):
-    return preprocess_for_train(image, height, width, color_distort,
-                                augmentation_mode=augmentation_mode,
-                                augmentation_num=augmentation_num)
+  if is_training:
+    return preprocess_for_train(image, height, width, color_distort)
   else:
-    return preprocess_for_eval(image, height, width, test_crop)  # TODO augmentation mode
+    return preprocess_for_eval(image, height, width, test_crop)

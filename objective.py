@@ -62,28 +62,7 @@ def add_contrastive_loss(hidden,
     else:
       hidden = tf.math.l2_normalize(hidden, -1)
 
-  if FLAGS.augmentation_mode.startswith('augmentation_based'):
-      if tpu_context is not None:
-        raise NotImplemented("TPU not implemented yet")
-
-      aug_num = labels['labels']
-      same_aug = tf.matmul(aug_num, aug_num, transpose_b=True)
-      if FLAGS.augmentation_mode == 'augmentation_based2':
-        same_aug = same_aug > 0.95
-      same_aug = tf.cast(same_aug, tf.int32)
-
-      flat_label = tf.reshape(same_aug, [-1])
-      flat_label = tf.one_hot(flat_label, 2)
-      logits = tf.matmul(hidden, hidden, transpose_b=True) / temperature
-      flat_logits = tf.reshape(logits, [-1])
-      flat_logits = tf.stack([-flat_logits, flat_logits], 1)
-
-      # NOTE: weights is not implemented (does not work if different than 1.0)
-      loss = tf.losses.softmax_cross_entropy(flat_label, flat_logits, weights=weights)
-
-      return loss, flat_logits, flat_label
-
-  elif FLAGS.augmentation_mode == 'augmentation_diff':
+  if FLAGS.augmentation_mode == 'augmentation_diff':
       hidden = tf.reshape(hidden, (hidden.shape[0] // 4, 4, *hidden.shape[1:]))
       batch_size = hidden.shape[0]
 
