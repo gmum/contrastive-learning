@@ -96,20 +96,16 @@ def add_contrastive_loss(hidden,
       hidden_img1 = tf.concat([hidden_img[:, 0], hidden_img[:, 1]], 0)
       hidden_img2 = tf.concat([hidden_img[:, 2], hidden_img[:, 3]], 0)
 
-      labels_img = tf.one_hot(tf.range(batch_size * 2), batch_size * 4)
-      masks_img = tf.one_hot(tf.range(batch_size * 2), batch_size * 2)
+      labels_img = tf.one_hot(tf.range(batch_size * 2), batch_size * 2)
+      # masks_img = tf.one_hot(tf.range(batch_size * 2), batch_size * 2)
 
-      logits_aa_img = tf.matmul(hidden_img1, hidden_img1, transpose_b=True) / temperature
-      logits_aa_img = logits_aa_img - masks_img * LARGE_NUM
-      logits_bb_img = tf.matmul(hidden_img2, hidden_img2, transpose_b=True) / temperature
-      logits_bb_img = logits_bb_img - masks_img * LARGE_NUM
       logits_ab_img = tf.matmul(hidden_img1, hidden_img2, transpose_b=True) / temperature
       logits_ba_img = tf.matmul(hidden_img2, hidden_img1, transpose_b=True) / temperature
 
       loss_a_img = tf.losses.softmax_cross_entropy(
-          labels_img, tf.concat([logits_ab_img, logits_aa_img], 1), weights=weights)
+          labels_img, logits_ab_img, weights=weights)
       loss_b_img = tf.losses.softmax_cross_entropy(
-          labels_img, tf.concat([logits_ba_img, logits_bb_img], 1), weights=weights)
+          labels_img, logits_ba_img, weights=weights)
       loss_img = loss_a_img + loss_b_img
 
       labels_aug = tf.one_hot(tf.range(batch_size), batch_size * 2)
@@ -131,7 +127,16 @@ def add_contrastive_loss(hidden,
       loss = FLAGS.pretrain_loss_weight_aug * loss_aug + (1.0 - FLAGS.pretrain_loss_weight_aug) * loss_img
 
       logits_ab_aug = tf.concat([logits_ab_aug, tf.fill(logits_ab_aug.shape, -LARGE_NUM)], -1)
-      labels_aug = tf.concat([labels_aug, tf.zeros_like(labels_aug)], -1)
+      # labels_aug = tf.concat([labels_aug, tf.zeros_like(labels_aug)], -1)
+
+# (512, 512) (256, 256)                                                                                                                                                       
+# (512, 512) (256, 512) 
+
+      print(logits_ab_img.shape, logits_ab_aug.shape)
+      print(labels_img.shape, labels_aug.shape)
+
+      # (512, 512) (256, 512)                                                                                                                                                       
+      # (512, 512) (256, 1024)
 
       logits_ab = tf.concat([logits_ab_img, logits_ab_aug], axis=0)
       labels = tf.concat([labels_img, labels_aug], axis=0)
