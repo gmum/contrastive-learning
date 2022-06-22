@@ -384,12 +384,20 @@ def random_crop_with_resize(image, height, width, p=1.0):
 
 def random_color_jitter(image, p=1.0, strength=1.0,
                         impl='simclrv2'):
-
   def _transform(image):
+    if image.shape[-1] == 6:
+        pair_sample = True
+        image = tf.reshape(image, (*image.shape[:2], 2, 3))
+        image = tf.reshape(image, (image.shape[0], image.shape[1] * 2, 3))
+    else:
+        pair_sample = False
     color_jitter_t = functools.partial(
         color_jitter, strength=strength, impl=impl)
     image = random_apply(color_jitter_t, p=0.8, x=image)
-    return random_apply(to_grayscale, p=0.2, x=image)
+    result = random_apply(to_grayscale, p=0.2, x=image)
+    if pair_sample:
+      result = tf.reshape(result, (image.shape[0], image.shape[1] // 2, 6))
+    return result
   return random_apply(_transform, p=p, x=image)
 
 
