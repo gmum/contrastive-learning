@@ -19,24 +19,26 @@ from absl import flags
 
 import tensorflow.compat.v2 as tf
 
+from model_util import get_projection_head
+
 FLAGS = flags.FLAGS
 
 LARGE_NUM = 1e9
 
 
 def add_supervised_loss(labels, logits):
-  """Compute mean supervised loss over local batch."""
-  losses = tf.keras.losses.CategoricalCrossentropy(
-      from_logits=True, reduction=tf.keras.losses.Reduction.NONE)(labels,
-                                                                  logits)
-  return tf.reduce_mean(losses)
+    """Compute mean supervised loss over local batch."""
+    losses = tf.keras.losses.CategoricalCrossentropy(
+        from_logits=True, reduction=tf.keras.losses.Reduction.NONE)(labels,
+                                                                    logits)
+    return tf.reduce_mean(losses)
 
 
 def add_contrastive_loss(hidden,
                          hidden_norm=True,
                          temperature=1.0,
                          strategy=None):
-  """Compute loss for model.
+    """Compute loss for model.
 
   Args:
     hidden: hidden vector (`Tensor`) of shape (bsz, dim).
@@ -49,48 +51,124 @@ def add_contrastive_loss(hidden,
     The logits for contrastive prediction task.
     The labels for contrastive prediction task.
   """
-  # Get (normalized) hidden1 and hidden2.
-  if hidden_norm:
-    hidden = tf.math.l2_normalize(hidden, -1)
-  hidden1, hidden2 = tf.split(hidden, 2, 0)
-  batch_size = tf.shape(hidden1)[0]
+    # Get (normalized) hidden1 and hidden2.
+    if hidden_norm:
+        if FLAGS.augmentation_mode == 'augmentation_diff_combined':
+            hidden = [tf.math.l2_normalize(hidden[0], -1), tf.math.l2_normalize(hidden[1], -1)]
+        else:
+            hidden = tf.math.l2_normalize(hidden, -1)
 
-  # Gather hidden1/hidden2 across replicas and create local labels.
-  if strategy is not None:
-    hidden1_large = tpu_cross_replica_concat(hidden1, strategy)
-    hidden2_large = tpu_cross_replica_concat(hidden2, strategy)
-    enlarged_batch_size = tf.shape(hidden1_large)[0]
-    # TODO(iamtingchen): more elegant way to convert u32 to s32 for replica_id.
-    replica_context = tf.distribute.get_replica_context()
-    replica_id = tf.cast(
-        tf.cast(replica_context.replica_id_in_sync_group, tf.uint32), tf.int32)
-    labels_idx = tf.range(batch_size) + replica_id * batch_size
-    labels = tf.one_hot(labels_idx, enlarged_batch_size * 2)
-    masks = tf.one_hot(labels_idx, enlarged_batch_size)
-  else:
-    hidden1_large = hidden1
-    hidden2_large = hidden2
-    labels = tf.one_hot(tf.range(batch_size), batch_size * 2)
-    masks = tf.one_hot(tf.range(batch_size), batch_size)
+    if FLAGS.augmentation_mode == 'augmentation_diff':
+        hidden = tf.reshape(hidden, (hidden.shape[0] // 4, 4, *hidden.shape[1:]))
+        batch_size = hidden.shape[0]
 
-  logits_aa = tf.matmul(hidden1, hidden1_large, transpose_b=True) / temperature
-  logits_aa = logits_aa - masks * LARGE_NUM
-  logits_bb = tf.matmul(hidden2, hidden2_large, transpose_b=True) / temperature
-  logits_bb = logits_bb - masks * LARGE_NUM
-  logits_ab = tf.matmul(hidden1, hidden2_large, transpose_b=True) / temperature
-  logits_ba = tf.matmul(hidden2, hidden1_large, transpose_b=True) / temperature
+        # element 0, 1 = augmentation1. 2, 3 = augmentation2
+        hidden1 = tf.math.l2_normalize(hidden[:, 2] - hidden[:, 0], -1)
+        hidden2 = tf.math.l2_normalize(hidden[:, 3] - hidden[:, 1], -1)
 
-  loss_a = tf.nn.softmax_cross_entropy_with_logits(
-      labels, tf.concat([logits_ab, logits_aa], 1))
-  loss_b = tf.nn.softmax_cross_entropy_with_logits(
-      labels, tf.concat([logits_ba, logits_bb], 1))
-  loss = tf.reduce_mean(loss_a + loss_b)
+        labels = tf.one_hot(tf.range(batch_size), batch_size * 2)
+        masks = tf.one_hot(tf.range(batch_size), batch_size)
 
-  return loss, logits_ab, labels
+        hidden1_large = hidden1
+        hidden2_large = hidden2
+    elif FLAGS.augmentation_mode == 'augmentation_diff_combined':
+        hidden_img, hidden_aug = hidden[0], hidden[1]
+
+        hidden_img = tf.reshape(hidden_img, (hidden_img.shape[0] // 4, 4, *hidden_img.shape[1:]))
+        hidden_aug = tf.reshape(hidden_aug, (hidden_aug.shape[0] // 4, 4, *hidden_aug.shape[1:]))
+        batch_size = hidden_aug.shape[0]
+
+        # element 0, 1 = augmentation1. 2, 3 = augmentation2
+        # element 0, 2 = image1. 1, 3 = image2
+        hidden_aug_left = tf.concat([hidden_aug[:, 0], hidden_aug[:, 1]], 0)
+        hidden_aug_right = tf.concat([hidden_aug[:, 2], hidden_aug[:, 3]], 0)
+
+        aug_diff_proj_head = get_projection_head(hidden_aug_left - hidden_aug_right, is_training=True,
+                                                 mid_dim=hidden_aug.shape[-1])
+        aug_diff_proj_head = tf.math.l2_normalize(aug_diff_proj_head, -1)
+        hidden_aug1 = aug_diff_proj_head[:aug_diff_proj_head.shape[0] // 2]
+        hidden_aug2 = aug_diff_proj_head[aug_diff_proj_head.shape[0] // 2:]
+
+        hidden_img1 = tf.concat([hidden_img[:, 0], hidden_img[:, 1]], 0)
+        hidden_img2 = tf.concat([hidden_img[:, 2], hidden_img[:, 3]], 0)
+
+        labels_img = tf.one_hot(tf.range(batch_size * 2), batch_size * 2)
+        # masks_img = tf.one_hot(tf.range(batch_size * 2), batch_size * 2)
+
+        logits_ab_img = tf.matmul(hidden_img1, hidden_img2, transpose_b=True) / temperature
+        logits_ba_img = tf.matmul(hidden_img2, hidden_img1, transpose_b=True) / temperature
+
+        loss_a_img = tf.losses.softmax_cross_entropy(
+            labels_img, logits_ab_img)
+        loss_b_img = tf.losses.softmax_cross_entropy(
+            labels_img, logits_ba_img)
+        loss_img = loss_a_img + loss_b_img
+
+        labels_aug = tf.one_hot(tf.range(batch_size), batch_size * 2)
+        masks_aug = tf.one_hot(tf.range(batch_size), batch_size)
+
+        logits_aa_aug = tf.matmul(hidden_aug1, hidden_aug1, transpose_b=True) / temperature
+        logits_aa_aug = logits_aa_aug - masks_aug * LARGE_NUM
+        logits_bb_aug = tf.matmul(hidden_aug2, hidden_aug2, transpose_b=True) / temperature
+        logits_bb_aug = logits_bb_aug - masks_aug * LARGE_NUM
+        logits_ab_aug = tf.matmul(hidden_aug1, hidden_aug2, transpose_b=True) / temperature
+        logits_ba_aug = tf.matmul(hidden_aug2, hidden_aug1, transpose_b=True) / temperature
+
+        loss_a_aug = tf.losses.softmax_cross_entropy(
+            labels_aug, tf.concat([logits_ab_aug, logits_aa_aug], 1))
+        loss_b_aug = tf.losses.softmax_cross_entropy(
+            labels_aug, tf.concat([logits_ba_aug, logits_bb_aug], 1))
+        loss_aug = loss_a_aug + loss_b_aug
+
+        loss = FLAGS.pretrain_loss_weight_aug * loss_aug + (1.0 - FLAGS.pretrain_loss_weight_aug) * loss_img
+
+        logits_ab_aug = tf.concat([logits_ab_aug, tf.fill(logits_ab_aug.shape, -LARGE_NUM)], -1)
+        # labels_aug = tf.concat([labels_aug, tf.zeros_like(labels_aug)], -1)
+
+        logits_ab = tf.concat([logits_ab_img, logits_ab_aug], axis=0)
+        labels = tf.concat([labels_img, labels_aug], axis=0)
+
+        return loss, logits_ab, labels
+    else:
+        hidden1, hidden2 = tf.split(hidden, 2, 0)
+        batch_size = tf.shape(hidden1)[0]
+
+        # Gather hidden1/hidden2 across replicas and create local labels.
+        if strategy is not None:
+            hidden1_large = tpu_cross_replica_concat(hidden1, strategy)
+            hidden2_large = tpu_cross_replica_concat(hidden2, strategy)
+            enlarged_batch_size = tf.shape(hidden1_large)[0]
+            # TODO(iamtingchen): more elegant way to convert u32 to s32 for replica_id.
+            replica_context = tf.distribute.get_replica_context()
+            replica_id = tf.cast(
+                tf.cast(replica_context.replica_id_in_sync_group, tf.uint32), tf.int32)
+            labels_idx = tf.range(batch_size) + replica_id * batch_size
+            labels = tf.one_hot(labels_idx, enlarged_batch_size * 2)
+            masks = tf.one_hot(labels_idx, enlarged_batch_size)
+        else:
+            hidden1_large = hidden1
+            hidden2_large = hidden2
+            labels = tf.one_hot(tf.range(batch_size), batch_size * 2)
+            masks = tf.one_hot(tf.range(batch_size), batch_size)
+
+    logits_aa = tf.matmul(hidden1, hidden1_large, transpose_b=True) / temperature
+    logits_aa = logits_aa - masks * LARGE_NUM
+    logits_bb = tf.matmul(hidden2, hidden2_large, transpose_b=True) / temperature
+    logits_bb = logits_bb - masks * LARGE_NUM
+    logits_ab = tf.matmul(hidden1, hidden2_large, transpose_b=True) / temperature
+    logits_ba = tf.matmul(hidden2, hidden1_large, transpose_b=True) / temperature
+
+    loss_a = tf.nn.softmax_cross_entropy_with_logits(
+        labels, tf.concat([logits_ab, logits_aa], 1))
+    loss_b = tf.nn.softmax_cross_entropy_with_logits(
+        labels, tf.concat([logits_ba, logits_bb], 1))
+    loss = tf.reduce_mean(loss_a + loss_b)
+
+    return loss, logits_ab, labels
 
 
 def tpu_cross_replica_concat(tensor, strategy=None):
-  """Reduce a concatenation of the `tensor` across TPU cores.
+    """Reduce a concatenation of the `tensor` across TPU cores.
 
   Args:
     tensor: tensor to concatenate.
@@ -100,28 +178,28 @@ def tpu_cross_replica_concat(tensor, strategy=None):
     Tensor of the same rank as `tensor` with first dimension `num_replicas`
     times larger.
   """
-  if strategy is None or strategy.num_replicas_in_sync <= 1:
-    return tensor
+    if strategy is None or strategy.num_replicas_in_sync <= 1:
+        return tensor
 
-  num_replicas = strategy.num_replicas_in_sync
+    num_replicas = strategy.num_replicas_in_sync
 
-  replica_context = tf.distribute.get_replica_context()
-  with tf.name_scope('tpu_cross_replica_concat'):
-    # This creates a tensor that is like the input tensor but has an added
-    # replica dimension as the outermost dimension. On each replica it will
-    # contain the local values and zeros for all other values that need to be
-    # fetched from other replicas.
-    ext_tensor = tf.scatter_nd(
-        indices=[[replica_context.replica_id_in_sync_group]],
-        updates=[tensor],
-        shape=tf.concat([[num_replicas], tf.shape(tensor)], axis=0))
+    replica_context = tf.distribute.get_replica_context()
+    with tf.name_scope('tpu_cross_replica_concat'):
+        # This creates a tensor that is like the input tensor but has an added
+        # replica dimension as the outermost dimension. On each replica it will
+        # contain the local values and zeros for all other values that need to be
+        # fetched from other replicas.
+        ext_tensor = tf.scatter_nd(
+            indices=[[replica_context.replica_id_in_sync_group]],
+            updates=[tensor],
+            shape=tf.concat([[num_replicas], tf.shape(tensor)], axis=0))
 
-    # As every value is only present on one replica and 0 in all others, adding
-    # them all together will result in the full tensor on all replicas.
-    ext_tensor = replica_context.all_reduce(tf.distribute.ReduceOp.SUM,
-                                            ext_tensor)
+        # As every value is only present on one replica and 0 in all others, adding
+        # them all together will result in the full tensor on all replicas.
+        ext_tensor = replica_context.all_reduce(tf.distribute.ReduceOp.SUM,
+                                                ext_tensor)
 
-    # Flatten the replica dimension.
-    # The first dimension size will be: tensor.shape[0] * num_replicas
-    # Using [-1] trick to support also scalar input.
-    return tf.reshape(ext_tensor, [-1] + ext_tensor.shape.as_list()[2:])
+        # Flatten the replica dimension.
+        # The first dimension size will be: tensor.shape[0] * num_replicas
+        # Using [-1] trick to support also scalar input.
+        return tf.reshape(ext_tensor, [-1] + ext_tensor.shape.as_list()[2:])
