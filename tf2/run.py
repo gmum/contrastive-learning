@@ -29,6 +29,8 @@ import objective as obj_lib
 import tensorflow.compat.v2 as tf
 import tensorflow_datasets as tfds
 
+from model import ProjectionHead
+
 
 
 FLAGS = flags.FLAGS
@@ -589,11 +591,18 @@ def main(argv):
         loss = None
         if projection_head_outputs is not None:
           outputs = projection_head_outputs
+          if FLAGS.augmentation_mode.startswith('augmentation_diff'):
+              projection_head_diff = ProjectionHead()
+          else:
+              projection_head_diff = None
+
           con_loss, logits_con, labels_con = obj_lib.add_contrastive_loss(
               outputs,
               hidden_norm=FLAGS.hidden_norm,
               temperature=FLAGS.temperature,
-              strategy=strategy)
+              strategy=strategy,
+              projection_head_diff=projection_head_diff
+            )
           if loss is None:
             loss = con_loss
           else:
@@ -606,7 +615,8 @@ def main(argv):
         if supervised_head_outputs is not None:
           outputs = supervised_head_outputs
           l = labels['labels']
-          if FLAGS.train_mode == 'pretrain' and FLAGS.lineareval_while_pretraining:
+          if FLAGS.train_mode == 'pretrain' and FLAGS.lineareval_while_pretraining \
+                  and not FLAGS.augmentation_mode.startswith('augmentation_diff'):
             l = tf.concat([l, l], 0)
           sup_loss = obj_lib.add_supervised_loss(labels=l, logits=outputs)
           if loss is None:

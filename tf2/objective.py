@@ -37,7 +37,8 @@ def add_supervised_loss(labels, logits):
 def add_contrastive_loss(hidden,
                          hidden_norm=True,
                          temperature=1.0,
-                         strategy=None):
+                         strategy=None,
+                         projection_head_diff=None):
     """Compute loss for model.
 
   Args:
@@ -56,7 +57,6 @@ def add_contrastive_loss(hidden,
         hidden = tf.math.l2_normalize(hidden, -1)
 
     if FLAGS.augmentation_mode == 'augmentation_diff':
-        projection_head_diff = ProjectionHead()
         hidden = tf.reshape(hidden, (hidden.shape[0] // 4, 4, *hidden.shape[1:]))
         batch_size = hidden.shape[0]
 
@@ -79,7 +79,6 @@ def add_contrastive_loss(hidden,
         hidden1_large = diff1
         hidden2_large = diff2
     elif FLAGS.augmentation_mode == 'augmentation_diff_combined':
-        projection_head_diff = ProjectionHead()
         hidden = tf.reshape(hidden, (hidden.shape[0] // 4, 4, *hidden.shape[1:]))
         batch_size = hidden.shape[0]
 
