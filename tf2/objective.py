@@ -104,9 +104,9 @@ def add_contrastive_loss(hidden,
         logits_ab_img = tf.matmul(hidden_img1, hidden_img2, transpose_b=True) / temperature
         logits_ba_img = tf.matmul(hidden_img2, hidden_img1, transpose_b=True) / temperature
 
-        loss_a_img = tf.losses.softmax_cross_entropy(
+        loss_a_img = tf.nn.softmax_cross_entropy_with_logits(
             labels_img, logits_ab_img)
-        loss_b_img = tf.losses.softmax_cross_entropy(
+        loss_b_img = tf.nn.softmax_cross_entropy_with_logits(
             labels_img, logits_ba_img)
         loss_img = loss_a_img + loss_b_img
 
@@ -120,9 +120,9 @@ def add_contrastive_loss(hidden,
         logits_ab_aug = tf.matmul(hidden_aug1, hidden_aug2, transpose_b=True) / temperature
         logits_ba_aug = tf.matmul(hidden_aug2, hidden_aug1, transpose_b=True) / temperature
 
-        loss_a_aug = tf.losses.softmax_cross_entropy(
+        loss_a_aug = tf.nn.softmax_cross_entropy_with_logits(
             labels_aug, tf.concat([logits_ab_aug, logits_aa_aug], 1))
-        loss_b_aug = tf.losses.softmax_cross_entropy(
+        loss_b_aug = tf.nn.softmax_cross_entropy_with_logits(
             labels_aug, tf.concat([logits_ba_aug, logits_bb_aug], 1))
         loss_aug = loss_a_aug + loss_b_aug
 
