@@ -76,16 +76,24 @@ def add_contrastive_loss(hidden,
         labels = tf.one_hot(tf.range(batch_size), batch_size * 2)
         masks = tf.one_hot(tf.range(batch_size), batch_size)
 
+        hidden1 = diff1
+        hidden2 = diff2
         hidden1_large = diff1
         hidden2_large = diff2
     elif FLAGS.augmentation_mode == 'augmentation_diff_combined':
         hidden = tf.reshape(hidden, (hidden.shape[0] // 4, 4, *hidden.shape[1:]))
         batch_size = hidden.shape[0]
 
+        if FLAGS.double_head:
+            projection_head_aug = ProjectionHead()
+            hidden_aug, _ = projection_head_aug(hidden, training=True)
+        else:
+            hidden_aug = hidden
+
         # element 0, 1 = augmentation1. 2, 3 = augmentation2
         # element 0, 2 = image1. 1, 3 = image2
-        hidden_aug_left = tf.concat([hidden[:, 0], hidden[:, 1]], 0)
-        hidden_aug_right = tf.concat([hidden[:, 2], hidden[:, 3]], 0)
+        hidden_aug_left = tf.concat([hidden_aug[:, 0], hidden_aug[:, 1]], 0)
+        hidden_aug_right = tf.concat([hidden_aug[:, 2], hidden_aug[:, 3]], 0)
 
         diff = hidden_aug_left - hidden_aug_right
 
@@ -94,8 +102,14 @@ def add_contrastive_loss(hidden,
         hidden_aug1 = aug_diff_proj_head[:aug_diff_proj_head.shape[0] // 2]
         hidden_aug2 = aug_diff_proj_head[aug_diff_proj_head.shape[0] // 2:]
 
-        hidden_img1 = tf.concat([hidden[:, 0], hidden[:, 1]], 0)
-        hidden_img2 = tf.concat([hidden[:, 2], hidden[:, 3]], 0)
+        if FLAGS.double_head:
+            projection_head_img = ProjectionHead()
+            hidden_img, _ = projection_head_img(hidden, training=True)
+        else:
+            hidden_img = hidden
+
+        hidden_img1 = tf.concat([hidden_img[:, 0], hidden_img[:, 1]], 0)
+        hidden_img2 = tf.concat([hidden_img[:, 2], hidden_img[:, 3]], 0)
 
         labels_img = tf.one_hot(tf.range(batch_size * 2), batch_size * 2)
 

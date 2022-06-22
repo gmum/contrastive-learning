@@ -28,6 +28,10 @@ import model as model_lib
 import objective as obj_lib
 import tensorflow.compat.v2 as tf
 import tensorflow_datasets as tfds
+import tensorflow as tf
+
+tf.config.run_functions_eagerly(True)
+
 
 from model import ProjectionHead
 
@@ -248,6 +252,10 @@ flags.DEFINE_string(
 flags.DEFINE_float(
     'pretrain_loss_weight_aug', 0.5,
     'In "combined" augmentation mode, weight of the loss part based on augmentation representation difference.')
+
+flags.DEFINE_bool(
+    'double_head', False,
+    'Additional head before both augmentation types')
 
 
 def get_salient_tensors_dict(include_projection_head):
@@ -521,6 +529,10 @@ def main(argv):
 
   with strategy.scope():
     model = model_lib.Model(num_classes)
+    if FLAGS.augmentation_mode.startswith('augmentation_diff'):
+        projection_head_diff = ProjectionHead()
+    else:
+        projection_head_diff = None
 
   if FLAGS.mode == 'eval':
     for ckpt in tf.train.checkpoints_iterator(
@@ -591,11 +603,6 @@ def main(argv):
         loss = None
         if projection_head_outputs is not None:
           outputs = projection_head_outputs
-          if FLAGS.augmentation_mode.startswith('augmentation_diff'):
-              projection_head_diff = ProjectionHead()
-          else:
-              projection_head_diff = None
-
           con_loss, logits_con, labels_con = obj_lib.add_contrastive_loss(
               outputs,
               hidden_norm=FLAGS.hidden_norm,
