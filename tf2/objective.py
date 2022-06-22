@@ -78,7 +78,6 @@ def add_contrastive_loss(hidden,
 
         hidden1_large = diff1
         hidden2_large = diff2
-
     elif FLAGS.augmentation_mode == 'augmentation_diff_combined':
         projection_head_diff = ProjectionHead()
         hidden = tf.reshape(hidden, (hidden.shape[0] // 4, 4, *hidden.shape[1:]))
@@ -109,6 +108,7 @@ def add_contrastive_loss(hidden,
         loss_b_img = tf.nn.softmax_cross_entropy_with_logits(
             labels_img, logits_ba_img)
         loss_img = loss_a_img + loss_b_img
+        loss_img = tf.reduce_mean(loss_img)
 
         labels_aug = tf.one_hot(tf.range(batch_size), batch_size * 2)
         masks_aug = tf.one_hot(tf.range(batch_size), batch_size)
@@ -125,6 +125,7 @@ def add_contrastive_loss(hidden,
         loss_b_aug = tf.nn.softmax_cross_entropy_with_logits(
             labels_aug, tf.concat([logits_ba_aug, logits_bb_aug], 1))
         loss_aug = loss_a_aug + loss_b_aug
+        loss_aug = tf.reduce_mean(loss_aug)
 
         loss = FLAGS.pretrain_loss_weight_aug * loss_aug + (1.0 - FLAGS.pretrain_loss_weight_aug) * loss_img
 
