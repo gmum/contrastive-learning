@@ -19,7 +19,7 @@ from absl import flags
 
 import tensorflow.compat.v2 as tf
 
-from model_util import get_projection_head
+from tf2.model import ProjectionHead
 
 FLAGS = flags.FLAGS
 
@@ -53,47 +53,53 @@ def add_contrastive_loss(hidden,
   """
     # Get (normalized) hidden1 and hidden2.
     if hidden_norm:
-        if FLAGS.augmentation_mode == 'augmentation_diff_combined':
-            hidden = [tf.math.l2_normalize(hidden[0], -1), tf.math.l2_normalize(hidden[1], -1)]
-        else:
-            hidden = tf.math.l2_normalize(hidden, -1)
+        hidden = tf.math.l2_normalize(hidden, -1)
 
     if FLAGS.augmentation_mode == 'augmentation_diff':
+        projection_head_diff = ProjectionHead()
         hidden = tf.reshape(hidden, (hidden.shape[0] // 4, 4, *hidden.shape[1:]))
         batch_size = hidden.shape[0]
 
         # element 0, 1 = augmentation1. 2, 3 = augmentation2
-        hidden1 = tf.math.l2_normalize(hidden[:, 2] - hidden[:, 0], -1)
-        hidden2 = tf.math.l2_normalize(hidden[:, 3] - hidden[:, 1], -1)
+        diff1 = hidden[:, 2] - hidden[:, 0]
+        diff2 = hidden[:, 3] - hidden[:, 1]
+
+        diff = tf.concat([diff1, diff2], 0)
+
+        diff, _ = projection_head_diff(
+            diff, training=True)
+        diff = tf.math.l2_normalize(diff, -1)
+
+        diff1 = diff[:diff.shape[0] // 2]
+        diff2 = diff[diff.shape[0] // 2:]
 
         labels = tf.one_hot(tf.range(batch_size), batch_size * 2)
         masks = tf.one_hot(tf.range(batch_size), batch_size)
 
-        hidden1_large = hidden1
-        hidden2_large = hidden2
-    elif FLAGS.augmentation_mode == 'augmentation_diff_combined':
-        hidden_img, hidden_aug = hidden[0], hidden[1]
+        hidden1_large = diff1
+        hidden2_large = diff2
 
-        hidden_img = tf.reshape(hidden_img, (hidden_img.shape[0] // 4, 4, *hidden_img.shape[1:]))
-        hidden_aug = tf.reshape(hidden_aug, (hidden_aug.shape[0] // 4, 4, *hidden_aug.shape[1:]))
-        batch_size = hidden_aug.shape[0]
+    elif FLAGS.augmentation_mode == 'augmentation_diff_combined':
+        projection_head_diff = ProjectionHead()
+        hidden = tf.reshape(hidden, (hidden.shape[0] // 4, 4, *hidden.shape[1:]))
+        batch_size = hidden.shape[0]
 
         # element 0, 1 = augmentation1. 2, 3 = augmentation2
         # element 0, 2 = image1. 1, 3 = image2
-        hidden_aug_left = tf.concat([hidden_aug[:, 0], hidden_aug[:, 1]], 0)
-        hidden_aug_right = tf.concat([hidden_aug[:, 2], hidden_aug[:, 3]], 0)
+        hidden_aug_left = tf.concat([hidden[:, 0], hidden[:, 1]], 0)
+        hidden_aug_right = tf.concat([hidden[:, 2], hidden[:, 3]], 0)
 
-        aug_diff_proj_head = get_projection_head(hidden_aug_left - hidden_aug_right, is_training=True,
-                                                 mid_dim=hidden_aug.shape[-1])
+        diff = hidden_aug_left - hidden_aug_right
+
+        aug_diff_proj_head, _ = projection_head_diff(diff, training=True)
         aug_diff_proj_head = tf.math.l2_normalize(aug_diff_proj_head, -1)
         hidden_aug1 = aug_diff_proj_head[:aug_diff_proj_head.shape[0] // 2]
         hidden_aug2 = aug_diff_proj_head[aug_diff_proj_head.shape[0] // 2:]
 
-        hidden_img1 = tf.concat([hidden_img[:, 0], hidden_img[:, 1]], 0)
-        hidden_img2 = tf.concat([hidden_img[:, 2], hidden_img[:, 3]], 0)
+        hidden_img1 = tf.concat([hidden[:, 0], hidden[:, 1]], 0)
+        hidden_img2 = tf.concat([hidden[:, 2], hidden[:, 3]], 0)
 
         labels_img = tf.one_hot(tf.range(batch_size * 2), batch_size * 2)
-        # masks_img = tf.one_hot(tf.range(batch_size * 2), batch_size * 2)
 
         logits_ab_img = tf.matmul(hidden_img1, hidden_img2, transpose_b=True) / temperature
         logits_ba_img = tf.matmul(hidden_img2, hidden_img1, transpose_b=True) / temperature
