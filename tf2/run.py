@@ -243,6 +243,10 @@ flags.DEFINE_string(
     '"original" == same as in SimCLR.'
 )
 
+flags.DEFINE_float(
+    'pretrain_loss_weight_aug', 0.5,
+    'In "combined" augmentation mode, weight of the loss part based on augmentation representation difference.')
+
 
 def get_salient_tensors_dict(include_projection_head):
   """Returns a dictionary of tensors."""
