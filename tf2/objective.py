@@ -19,7 +19,7 @@ from absl import flags
 
 import tensorflow.compat.v2 as tf
 
-from tf2.model import ProjectionHead
+from model import ProjectionHead
 
 FLAGS = flags.FLAGS
 

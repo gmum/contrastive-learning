@@ -237,6 +237,12 @@ flags.DEFINE_boolean(
     'use_blur', True,
     'Whether or not to use Gaussian blur for augmentation during pretraining.')
 
+flags.DEFINE_string(
+    'augmentation_mode', 'original',
+    'Type of contrastive learning. '
+    '"original" == same as in SimCLR.'
+)
+
 
 def get_salient_tensors_dict(include_projection_head):
   """Returns a dictionary of tensors."""
