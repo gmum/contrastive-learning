@@ -30,11 +30,7 @@ import tensorflow.compat.v2 as tf
 import tensorflow_datasets as tfds
 import tensorflow as tf
 
-tf.config.run_functions_eagerly(True)
-
-
-from model import ProjectionHead
-
+# tf.config.run_functions_eagerly(True)
 
 
 FLAGS = flags.FLAGS
@@ -252,10 +248,6 @@ flags.DEFINE_string(
 flags.DEFINE_float(
     'pretrain_loss_weight_aug', 0.5,
     'In "combined" augmentation mode, weight of the loss part based on augmentation representation difference.')
-
-flags.DEFINE_bool(
-    'double_head', False,
-    'Additional head before both augmentation types')
 
 
 def get_salient_tensors_dict(include_projection_head):
@@ -529,10 +521,6 @@ def main(argv):
 
   with strategy.scope():
     model = model_lib.Model(num_classes)
-    if FLAGS.augmentation_mode.startswith('augmentation_diff'):
-        projection_head_diff = ProjectionHead()
-    else:
-        projection_head_diff = None
 
   if FLAGS.mode == 'eval':
     for ckpt in tf.train.checkpoints_iterator(
@@ -564,9 +552,25 @@ def main(argv):
         contrast_acc_metric = tf.keras.metrics.Mean('train/contrast_acc')
         contrast_entropy_metric = tf.keras.metrics.Mean(
             'train/contrast_entropy')
-        all_metrics.extend([
-            contrast_loss_metric, contrast_acc_metric, contrast_entropy_metric
-        ])
+        
+        if FLAGS.augmentation_mode == 'augmentation_diff_combined':
+          contrast_img_loss_metric = tf.keras.metrics.Mean('train/contrast_original_loss')
+          contrast_img_acc_metric = tf.keras.metrics.Mean('train/contrast_original_acc')
+          contrast_img_entropy_metric = tf.keras.metrics.Mean(
+                'train/contrast_original_entropy')
+          contrast_aug_loss_metric = tf.keras.metrics.Mean('train/contrast_ours_loss')
+          contrast_aug_acc_metric = tf.keras.metrics.Mean('train/contrast_ours_acc')
+          contrast_aug_entropy_metric = tf.keras.metrics.Mean(
+              'train/contrast_ours_entropy')
+          all_metrics.extend([
+              contrast_loss_metric, contrast_acc_metric, contrast_entropy_metric,
+              contrast_img_loss_metric, contrast_img_acc_metric, contrast_img_entropy_metric,
+              contrast_aug_loss_metric, contrast_aug_acc_metric, contrast_aug_entropy_metric,
+          ])
+        else:
+          all_metrics.extend([
+              contrast_loss_metric, contrast_acc_metric, contrast_entropy_metric
+          ])
       if FLAGS.train_mode == 'finetune' or FLAGS.lineareval_while_pretraining:
         supervised_loss_metric = tf.keras.metrics.Mean('train/supervised_loss')
         supervised_acc_metric = tf.keras.metrics.Mean('train/supervised_acc')
@@ -607,9 +611,24 @@ def main(argv):
               outputs,
               hidden_norm=FLAGS.hidden_norm,
               temperature=FLAGS.temperature,
-              strategy=strategy,
-              projection_head_diff=projection_head_diff
+              strategy=strategy
             )
+
+          if isinstance(con_loss, list):
+            con_loss, con_loss_img, con_loss_aug = con_loss
+            logits_con, logits_con_img, logits_con_aug = logits_con
+            labels_con, labels_con_img, labels_con_aug = labels_con
+            diff_metrics = (contrast_img_loss_metric,
+                            contrast_img_acc_metric,
+                            contrast_img_entropy_metric,
+                            contrast_aug_loss_metric,
+                            contrast_aug_acc_metric,
+                            contrast_aug_entropy_metric,
+                            con_loss_img, labels_con_img, logits_con_img,
+                            con_loss_aug, labels_con_aug, logits_con_aug)
+          else:
+            diff_metrics = None
+
           if loss is None:
             loss = con_loss
           else:
@@ -618,7 +637,7 @@ def main(argv):
                                                 contrast_acc_metric,
                                                 contrast_entropy_metric,
                                                 con_loss, logits_con,
-                                                labels_con)
+                                                labels_con, diff_metrics=diff_metrics)
         if supervised_head_outputs is not None:
           outputs = supervised_head_outputs
           l = labels['labels']
@@ -642,9 +661,11 @@ def main(argv):
         # replicas so we divide the loss by the number of replicas so that the
         # mean gradient is applied.
         loss = loss / strategy.num_replicas_in_sync
-        logging.info('Trainable variables:')
-        for var in model.trainable_variables:
-          logging.info(var.name)
+
+        # TODO enable when not eager
+        # logging.info('Trainable variables:')
+        # for var in model.trainable_variables:
+          # logging.info(var.name)
         grads = tape.gradient(loss, model.trainable_variables)
         optimizer.apply_gradients(zip(grads, model.trainable_variables))
 

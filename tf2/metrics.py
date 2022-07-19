@@ -21,7 +21,7 @@ import tensorflow.compat.v2 as tf
 
 
 def update_pretrain_metrics_train(contrast_loss, contrast_acc, contrast_entropy,
-                                  loss, logits_con, labels_con):
+                                  loss, logits_con, labels_con, diff_metrics=None):
   """Updated pretraining metrics."""
   contrast_loss.update_state(loss)
 
@@ -34,6 +34,36 @@ def update_pretrain_metrics_train(contrast_loss, contrast_acc, contrast_entropy,
   entropy_con = -tf.reduce_mean(
       tf.reduce_sum(prob_con * tf.math.log(prob_con + 1e-8), -1))
   contrast_entropy.update_state(entropy_con)
+
+  if diff_metrics is not None:
+    contrast_img_loss, \
+    contrast_img_acc, \
+    contrast_img_entropy, \
+    contrast_aug_loss, \
+    contrast_aug_acc, \
+    contrast_aug_entropy, \
+    loss_img, labels_con_img, logits_con_img, \
+    loss_aug, labels_con_aug, logits_con_aug = diff_metrics
+
+    contrast_img_loss.update_state(loss_img)
+    contrast_img_acc_val = tf.equal(
+      tf.argmax(labels_con_img, 1), tf.argmax(logits_con_img, axis=1))
+    contrast_img_acc_val = tf.reduce_mean(tf.cast(contrast_img_acc_val, tf.float32))
+    contrast_img_acc.update_state(contrast_img_acc_val)
+    prob_con = tf.nn.softmax(logits_con_img)
+    entropy_con = -tf.reduce_mean(
+      tf.reduce_sum(prob_con * tf.math.log(prob_con + 1e-8), -1))
+    contrast_img_entropy.update_state(entropy_con)
+
+    contrast_aug_loss.update_state(loss_aug)
+    contrast_aug_acc_val = tf.equal(
+      tf.argmax(labels_con_aug, 1), tf.argmax(logits_con_aug, axis=1))
+    contrast_aug_acc_val = tf.reduce_mean(tf.cast(contrast_aug_acc_val, tf.float32))
+    contrast_aug_acc.update_state(contrast_aug_acc_val)
+    prob_con = tf.nn.softmax(logits_con_aug)
+    entropy_con = -tf.reduce_mean(
+      tf.reduce_sum(prob_con * tf.math.log(prob_con + 1e-8), -1))
+    contrast_aug_entropy.update_state(entropy_con)
 
 
 def update_pretrain_metrics_eval(contrast_loss_metric,

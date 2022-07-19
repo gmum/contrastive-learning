@@ -237,6 +237,13 @@ class Model(tf.keras.models.Model):
     self._projection_head = ProjectionHead()
     if FLAGS.train_mode == 'finetune' or FLAGS.lineareval_while_pretraining:
       self.supervised_head = SupervisedHead(num_classes)
+        
+    if FLAGS.augmentation_mode == 'augmentation_diff_combined':
+      self._projection_head_diff1 = ProjectionHead()
+      self._projection_head_diff2 = ProjectionHead()
+    else:
+      self._projection_head_diff1 = None
+      self._projection_head_diff2 = None
 
   def __call__(self, inputs, training):
     features = inputs
@@ -264,6 +271,29 @@ class Model(tf.keras.models.Model):
     # Add heads.
     projection_head_outputs, supervised_head_inputs = self._projection_head(
         hiddens, training)
+
+    if FLAGS.train_mode == 'pretrain' and FLAGS.augmentation_mode == 'augmentation_diff_combined':
+      projection_head_outputs_diff1, _ = self._projection_head_diff1(hiddens, training)
+
+      # calculate a projection on difference between augmentations on same image
+      proj_diff_input = tf.reshape(projection_head_outputs_diff1, (projection_head_outputs_diff1.shape[0] // 4, 4,
+                                                                   *projection_head_outputs_diff1.shape[1:]))
+      # (B//4, 4, 128)
+      # element 0, 1 = augmentation1. 2, 3 = augmentation2
+      # element 0, 2 = image1. 1, 3 = image2
+      input_aug_left = tf.concat([proj_diff_input[:, 0], proj_diff_input[:, 1]], 0)
+      input_aug_right = tf.concat([proj_diff_input[:, 2], proj_diff_input[:, 3]], 0)
+
+      diff = input_aug_left - input_aug_right
+      projection_head_outputs_diff2, _ = self._projection_head_diff2(diff, training=True)
+      if FLAGS.lineareval_while_pretraining:
+          supervised_head_outputs = self.supervised_head(
+              tf.stop_gradient(supervised_head_inputs), training)
+      else:
+          supervised_head_outputs = None
+
+      projection_head_outputs = [projection_head_outputs, projection_head_outputs_diff2]
+      return projection_head_outputs, supervised_head_outputs
 
     if FLAGS.train_mode == 'finetune':
       supervised_head_outputs = self.supervised_head(supervised_head_inputs,
